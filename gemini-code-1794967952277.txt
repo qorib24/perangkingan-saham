@@ -1,0 +1,133 @@
+# BLUEPRINT PENGEMBANGAN APLIKASI
+**Sistem Pendukung Keputusan Pemilihan Portofolio Saham LQ45 Menggunakan Metode AHP dan CoCoSo**
+
+---
+
+## 1. DESKRIPSI DAN SPESIFIKASI TEKNOLOGI
+Aplikasi ini adalah Sistem Pendukung Keputusan (SPK) berbasis web yang dirancang untuk membantu investor menentukan urutan prioritas pembelian saham pada Indeks LQ45. Sistem menggunakan AHP untuk menerima preferensi bobot dari investor dan CoCoSo untuk merangking data fundamental saham.
+
+*   **Bahasa Pemrograman:** PHP 8.x
+*   **Framework Backend:** Laravel 10.x / 11.x
+*   **Framework Frontend:** Blade Template, Bootstrap 5 / Tailwind CSS
+*   **Database:** MySQL / MariaDB
+*   **Library Tambahan:** 
+    *   `Maatwebsite/Laravel-Excel` (Untuk Import data fundamental dari Excel)
+    *   `Chart.js` atau `ApexCharts` (Untuk visualisasi grafik skor saham)
+
+---
+
+## 2. DAFTAR FITUR APLIKASI (FEATURE LIST)
+
+### A. Modul Autentikasi (Hak Akses)
+1. **Login & Register:** Pendaftaran akun untuk Investor (*User*) dan pintu masuk untuk Admin.
+2. **Manajemen Profil:** Fitur ubah *password* dan data profil pengguna.
+
+### B. Modul Admin (Data Master)
+1. **Dashboard Admin:** Menampilkan total kriteria, total saham, riwayat analisis user, dan status *update* data terakhir.
+2. **Kelola Kriteria (CRUD):** 
+   * Menambah dan mengedit indikator pasar (ROE, EPS, PER, PBV, Volume).
+   * Menetapkan atribut kriteria: **Benefit** (Maksimal) atau **Cost** (Minimal).
+3. **Kelola Alternatif Saham (CRUD):** 
+   * Mengelola daftar 45 saham yang terdaftar di Indeks LQ45 (Kode Saham, Nama Perusahaan, Sektor).
+4. **Kelola Nilai Fundamental:**
+   * **Input Manual:** Memasukkan nilai rasio setiap saham per kriteria.
+   * **Import Excel:** Unggah file `.xlsx`/.`csv` untuk memperbarui data 45 saham secara massal dan instan.
+
+### C. Modul Investor / User (Proses Analisis)
+1. **Dashboard Investor:** Menampilkan panduan penggunaan aplikasi dan histori portofolio yang pernah dianalisis.
+2. **Kuesioner Preferensi AHP:** Form dinamis bagi investor untuk membandingkan tingkat kepentingan antar kriteria (Skala Saaty 1-9).
+3. **Engine Kalkulasi:** Tombol aksi untuk memproses matriks AHP. Jika *Consistency Ratio* (CR) > 0.1, sistem akan meminta *user* mengisi ulang. Jika CR <= 0.1, sistem otomatis menjalankan algoritma CoCoSo.
+4. **Laporan & Rekomendasi (Output):**
+   * Menampilkan peringkat 1 sampai 45 saham LQ45 berdasarkan Skor Kompromi (Ki) dari CoCoSo.
+   * Visualisasi grafik 5 saham terbaik (*Top 5 Recommendations*).
+   * Fitur "Lihat Detail Matriks" untuk transparansi perhitungan matematis.
+
+---
+
+## 3. STRUKTUR DATA (DATABASE SCHEMA)
+
+Berikut adalah rancangan tabel (*Migration Schema*) yang dibutuhkan pada database MySQL:
+
+### 1. Tabel `users`
+* `id` (PK, BigInt, Auto Increment)
+* `name` (Varchar 255)
+* `email` (Varchar 255, Unique)
+* `password` (Varchar 255)
+* `role` (Enum: 'admin', 'investor')
+* `created_at`, `updated_at` (Timestamp)
+
+### 2. Tabel `kriteria`
+* `id` (PK, BigInt, Auto Increment)
+* `kode` (Varchar 10, Unique) -> *Contoh: C1, C2*
+* `nama` (Varchar 100) -> *Contoh: Return on Equity (ROE)*
+* `atribut` (Enum: 'benefit', 'cost')
+* `created_at`, `updated_at`
+
+### 3. Tabel `saham_alternatif`
+* `id` (PK, BigInt, Auto Increment)
+* `kode_saham` (Varchar 10, Unique) -> *Contoh: BBCA*
+* `nama_perusahaan` (Varchar 255) -> *Contoh: PT Bank Central Asia Tbk*
+* `sektor` (Varchar 100)
+* `created_at`, `updated_at`
+
+### 4. Tabel `nilai_fundamental` (Tabel Transaksi Admin)
+* `id` (PK, BigInt)
+* `saham_id` (FK to `saham_alternatif.id`, Cascade Delete)
+* `kriteria_id` (FK to `kriteria.id`, Cascade Delete)
+* `nilai_aktual` (Double / Float) -> *Contoh: 21.5 (untuk ROE 21.5%)*
+* `created_at`, `updated_at`
+
+### 5. Tabel `riwayat_analisis` (Menyimpan Sesi User)
+* `id` (PK, BigInt)
+* `user_id` (FK to `users.id`, Cascade Delete)
+* `tanggal` (Date)
+* `cr_value` (Double / Float) -> *Menyimpan nilai Consistency Ratio*
+* `created_at`, `updated_at`
+
+### 6. Tabel `detail_bobot_ahp` (Hasil AHP per Analisis)
+* `id` (PK, BigInt)
+* `riwayat_id` (FK to `riwayat_analisis.id`, Cascade Delete)
+* `kriteria_id` (FK to `kriteria.id`)
+* `bobot_prioritas` (Double / Float) -> *Contoh: 0.45*
+
+### 7. Tabel `hasil_ranking_cocoso` (Output Akhir per Analisis)
+* `id` (PK, BigInt)
+* `riwayat_id` (FK to `riwayat_analisis.id`, Cascade Delete)
+* `saham_id` (FK to `saham_alternatif.id`)
+* `skor_ki` (Double / Float) -> *Skor akhir CoCoSo*
+* `ranking` (Integer)
+
+---
+
+## 4. ALUR LOGIKA ALGORITMA (CONTROLLER ARCHITECTURE)
+
+**Fase 1: AhpController (Pembobotan)**
+1. Tangkap input matriks 5x5 dari *form user*.
+2. Hitung jumlah tiap kolom.
+3. Buat Matriks Nilai Kriteria (Normalisasi matriks: nilai / jumlah kolom).
+4. Hitung *Eigen Vector* (Bobot per kriteria: Rata-rata dari baris normalisasi).
+5. Hitung *Eigen Value* Maksimum (Lambda Max).
+6. Hitung *Consistency Index* (CI) = (Lambda Max - n) / (n - 1).
+7. Hitung *Consistency Ratio* (CR) = CI / RI (Random Index).
+8. Simpan bobot ke tabel `detail_bobot_ahp`.
+
+**Fase 2: CocosoController (Perangkingan)**
+1. Ambil bobot kriteria dari *Fase 1*.
+2. Ambil data nilai aktual saham dari `nilai_fundamental`.
+3. **Normalisasi CoCoSo:**
+   * Jika Atribut == Benefit: `(x - min) / (max - min)`
+   * Jika Atribut == Cost: `(max - x) / (max - min)`
+4. Hitung Total Comparability Sequence (**Si**): `Sum(Normalisasi * Bobot AHP)`
+5. Hitung Total Power Weight (**Pi**): `Sum(Normalisasi ^ Bobot AHP)`
+6. Hitung 3 Strategi Kompromi:
+   * **K1:** `(Pi + Si) / Sum(Pi + Si)`
+   * **K2:** `(Si / Min(Si)) + (Pi / Min(Pi))`
+   * **K3:** `(Lambda * Si) + ((1 - Lambda) * Pi)`
+7. Hitung Nilai Akhir (**Ki**): `(K1 * K2 * K3)^(1/3) + (1/3 * (K1 + K2 + K3))`
+8. Lakukan iterasi `arsort()` untuk merangking dari Ki tertinggi ke terendah.
+9. Simpan ke tabel `hasil_ranking_cocoso` dan kirim data ke *View*.
+```eof
+
+Dokumen blueprint di atas sudah mencakup struktur tabel yang siap dieksekusi melalui fitur *Migration* di Laravel, lengkap dengan relasi antar tabel dan alur fitur dari awal hingga akhir. 
+
+Sebagai langkah teknis selanjutnya untuk memulai proyek TA ini, apakah kamu ingin kita membahas bagaimana cara membuat *migration database*-nya di Laravel, atau kamu ingin merumuskan kuesioner antarmuka AHP-nya terlebih dahulu?
